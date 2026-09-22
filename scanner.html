@@ -1,0 +1,583 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<title>Doc Scanner</title>
+<style>
+  :root{
+    --bg:#101216; --panel:#181b21; --line:#2a2f39; --fg:#e9ecf1; --dim:#98a1b0;
+    --accent:#4f9cf9; --accent2:#26d07c; --danger:#ff5f56;
+  }
+  *{box-sizing:border-box}
+  html,body{margin:0;height:100%}
+  body{background:var(--bg);color:var(--fg);font:15px/1.45 -apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif;
+       display:flex;flex-direction:column;overflow:hidden;-webkit-user-select:none;user-select:none}
+  header{display:flex;align-items:center;gap:10px;padding:10px 14px;border-bottom:1px solid var(--line);background:var(--panel)}
+  header h1{font-size:15px;margin:0;font-weight:600;letter-spacing:.2px}
+  header .sp{flex:1}
+  .stage{flex:1;position:relative;overflow:hidden;display:flex;align-items:center;justify-content:center;background:#0b0d10}
+  .view{position:absolute;inset:0;display:none;align-items:center;justify-content:center;flex-direction:column}
+  .view.on{display:flex}
+  video,canvas{max-width:100%;max-height:100%;display:block}
+  #video{object-fit:contain;display:none}
+  #editWrap{position:relative;line-height:0}
+  #editCanvas{touch-action:none;cursor:crosshair}
+  #loupe{position:absolute;width:128px;height:128px;border-radius:50%;border:2px solid var(--accent);
+         box-shadow:0 6px 24px rgba(0,0,0,.6);display:none;pointer-events:none;z-index:5;background:#000}
+  footer{border-top:1px solid var(--line);background:var(--panel);padding:10px 14px;display:flex;gap:8px;
+         align-items:center;flex-wrap:wrap;justify-content:center}
+  button{background:#242932;color:var(--fg);border:1px solid var(--line);border-radius:9px;padding:9px 14px;
+         font-size:14px;font-weight:500;cursor:pointer;white-space:nowrap}
+  button:hover:not(:disabled){background:#2d333e}
+  button:disabled{opacity:.4;cursor:default}
+  button.primary{background:var(--accent);border-color:var(--accent);color:#04101f}
+  button.primary:hover{background:#69abfb}
+  button.go{background:var(--accent2);border-color:var(--accent2);color:#03291a}
+  select{background:#242932;color:var(--fg);border:1px solid var(--line);border-radius:9px;padding:9px 10px;
+         font-size:14px;max-width:230px}
+  .res{color:var(--dim);font-size:12px;font-variant-numeric:tabular-nums}
+  .seg{display:flex;border:1px solid var(--line);border-radius:9px;overflow:hidden}
+  .seg button{border:0;border-radius:0;padding:9px 12px;background:#20242c}
+  .seg button.sel{background:var(--accent);color:#04101f}
+  .msg{position:absolute;top:14px;left:50%;transform:translateX(-50%);background:rgba(0,0,0,.75);
+       border:1px solid var(--line);padding:8px 14px;border-radius:20px;font-size:13px;color:var(--dim);z-index:6}
+  .empty{color:var(--dim);text-align:center;padding:24px;max-width:420px;
+         display:flex;flex-direction:column;align-items:center;gap:12px}
+  #ocr{position:fixed;inset:0;background:rgba(6,8,12,.82);z-index:20;display:none;
+       align-items:center;justify-content:center;padding:20px}
+  #ocr.on{display:flex}
+  #ocrBox{background:var(--panel);border:1px solid var(--line);border-radius:12px;width:min(720px,100%);
+          max-height:100%;display:flex;flex-direction:column;overflow:hidden}
+  #ocrBox header{border-bottom:1px solid var(--line)}
+  #ocrStatus{color:var(--dim);font-size:13px;padding:10px 14px 0}
+  #ocrText{flex:1;min-height:220px;margin:10px 14px;background:#0f1216;color:var(--fg);border:1px solid var(--line);
+           border-radius:9px;padding:10px;font:13px/1.5 ui-monospace,SFMono-Regular,Menlo,monospace;resize:none;
+           -webkit-user-select:text;user-select:text}
+  #ocrBar{display:flex;gap:8px;justify-content:flex-end;padding:0 14px 14px}
+  #toast{position:fixed;left:50%;bottom:76px;transform:translateX(-50%);background:rgba(0,0,0,.85);
+         border:1px solid var(--line);color:var(--fg);padding:9px 16px;border-radius:20px;font-size:13px;
+         z-index:30;display:none;max-width:80vw;text-align:center}
+  input[type=file]{display:none}
+</style>
+</head>
+<body>
+<header>
+  <h1>Doc Scanner</h1>
+  <div class="sp"></div>
+  <button id="btnFile">Open image</button>
+  <input type="file" id="file" accept="image/*">
+</header>
+
+<div class="stage">
+  <!-- CAMERA -->
+  <div class="view on" id="vCam">
+    <video id="video" playsinline muted autoplay></video>
+    <div class="empty" id="camIdle">
+      <button class="primary" id="btnStart">Start camera</button>
+    </div>
+  </div>
+
+  <!-- CROP / CORNERS -->
+  <div class="view" id="vEdit">
+    <div id="editWrap">
+      <canvas id="editCanvas"></canvas>
+      <canvas id="loupe" width="128" height="128"></canvas>
+    </div>
+    <div class="msg">Drag the four corners onto the document</div>
+  </div>
+
+  <!-- RESULT -->
+  <div class="view" id="vOut">
+    <canvas id="outCanvas"></canvas>
+  </div>
+</div>
+
+<footer id="bar"></footer>
+
+<div id="toast"></div>
+
+<div id="ocr">
+  <div id="ocrBox">
+    <header><h1>Extracted text</h1></header>
+    <div id="ocrStatus"></div>
+    <textarea id="ocrText" spellcheck="false"></textarea>
+    <div id="ocrBar">
+      <button id="ocrCopy">Copy text</button>
+      <button id="ocrClose" class="primary">Close</button>
+    </div>
+  </div>
+</div>
+
+<script>
+const $ = id => document.getElementById(id);
+const video=$('video'), editCanvas=$('editCanvas'), outCanvas=$('outCanvas');
+const ectx=editCanvas.getContext('2d'), outctx=outCanvas.getContext('2d');
+
+let stream=null, videoDevices=[], deviceIdx=0;
+let source=null;             // full-res captured image (canvas)
+let corners=null;            // 4 pts in source coords, TL TR BR BL
+let warped=null;             // de-warped canvas (unfiltered)
+let filtered=null;           // canvas actually shown/saved
+let filterMode='enhance', rotation=0;
+let view='cam';
+
+/* ---------------- view switching ---------------- */
+function show(v){
+  view=v;
+  $('vCam').classList.toggle('on', v==='cam');
+  $('vEdit').classList.toggle('on', v==='edit');
+  $('vOut').classList.toggle('on', v==='out');
+  renderBar();
+}
+
+function renderBar(){
+  const bar=$('bar');
+  bar.innerHTML='';
+  const add=(label,fn,cls)=>{const b=document.createElement('button');b.textContent=label;if(cls)b.className=cls;b.onclick=fn;bar.appendChild(b);return b;};
+  if(view==='cam'){
+    if(stream){
+      add('Capture',capture,'primary');
+      if(videoDevices.length>1){
+        const sel=document.createElement('select');
+        videoDevices.forEach((d,i)=>{
+          const o=document.createElement('option');
+          o.value=d.deviceId; o.textContent=d.label||('Camera '+(i+1));
+          o.selected = i===deviceIdx;
+          sel.appendChild(o);
+        });
+        sel.onchange=()=>{ deviceIdx=sel.selectedIndex; startCam(); };
+        bar.appendChild(sel);
+      }
+      add('Stop camera', ()=>stopCam());
+      const r=document.createElement('span');
+      r.className='res'; r.id='res'; r.textContent=resText();
+      bar.appendChild(r);
+    }
+    // no Start button here: the idle panel already shows one in the middle
+  } else if(view==='edit'){
+    add('Capture again', ()=>{show('cam'); if(!stream) startCam();});
+    add('Reset corners', ()=>{ corners=defaultCorners(source); drawEdit(); });
+    add('Scan \u2192', doWarp,'go');
+  } else {
+    add('← Corners', ()=>{show('edit');drawEdit();});
+    const seg=document.createElement('div'); seg.className='seg';
+    [['original','Original'],['enhance','Enhance'],['gray','Gray'],['bw','B&W']].forEach(([k,label])=>{
+      const b=document.createElement('button'); b.textContent=label;
+      if(filterMode===k) b.className='sel';
+      b.onclick=()=>{filterMode=k;applyFilter();renderBar();};
+      seg.appendChild(b);
+    });
+    bar.appendChild(seg);
+    add('Rotate', ()=>{rotation=(rotation+90)%360; applyFilter();});
+    add('Copy image', copyImage);
+    add('Extract text', extractText);
+    add('Save PNG', download,'primary');
+  }
+  bar.style.display = bar.children.length ? '' : 'none';
+}
+
+/* ---------------- camera ---------------- */
+function resText(){ return video.videoWidth ? video.videoWidth+'\u00d7'+video.videoHeight : ''; }
+function showRes(){ const r=$('res'); if(r) r.textContent=resText(); }
+// the negotiated mode can change after applyConstraints, so track it live
+video.addEventListener('loadedmetadata', showRes);
+video.addEventListener('resize', showRes);
+
+// Cameras report width.max and height.max independently, and pairing them can name
+// a mode that does not exist (Continuity Camera advertises a 1552x1552 square that
+// way). So try real landscape shapes, largest first, and keep the first one the
+// camera actually gives back as landscape.
+async function maximize(track){
+  if(!track.getCapabilities || !track.applyConstraints) return;
+  let caps=null;
+  try{ caps=track.getCapabilities(); }catch(e){}
+  const long = caps && caps.width && caps.height
+    ? Math.max(caps.width.max||0, caps.height.max||0) : 0;
+  const cands=[];
+  if(long>1280){
+    cands.push({w:long, h:Math.round(long*9/16)});
+    cands.push({w:long, h:Math.round(long*3/4)});
+  }
+  cands.push({w:1920,h:1080},{w:1280,h:720});
+  let best=null;
+  for(const c of cands){
+    try{
+      await track.applyConstraints({width:{ideal:c.w}, height:{ideal:c.h}, aspectRatio:{ideal:c.w/c.h}});
+    }catch(e){ continue; }
+    const st=track.getSettings();
+    if(!st.width||!st.height) continue;
+    const land = st.width/st.height >= 1.2;
+    if(land) return;                       // candidates are ordered largest first
+    if(!best || st.width*st.height > best.w*best.h) best={w:st.width,h:st.height};
+  }
+  // nothing landscape on offer: settle on the biggest mode we saw
+  if(best){ try{ await track.applyConstraints({width:{ideal:best.w}, height:{ideal:best.h}}); }catch(e){} }
+}
+async function startCam(){
+  // Already live (e.g. Start pressed twice): reuse it rather than re-requesting,
+  // which would trigger another permission prompt on non-persistent origins.
+  if(stream && stream.getVideoTracks().some(t=>t.readyState==='live')){ show('cam'); return; }
+  stopCam(true);
+  const hi = {width:{ideal:1920}, height:{ideal:1080}};
+  // Constraint ladder: a stale exact deviceId throws OverconstrainedError after a
+  // stop/start cycle, so always keep looser fallbacks behind it.
+  const ladder = [];
+  const id = videoDevices[deviceIdx] && videoDevices[deviceIdx].deviceId;
+  if(id) ladder.push({video:{deviceId:{exact:id}, ...hi}});
+  ladder.push({video:{facingMode:{ideal:'environment'}, ...hi}});
+  ladder.push({video:hi});
+  ladder.push({video:true});
+
+  let err=null;
+  for(const c of ladder){
+    try{
+      stream = await navigator.mediaDevices.getUserMedia(c);
+      break;
+    }catch(e){
+      err=e; stream=null;
+      // A denied permission won't be fixed by looser constraints.
+      if(e.name==='NotAllowedError'||e.name==='SecurityError') break;
+    }
+  }
+  if(!stream){
+    const why = err ? (err.message || err.name || 'unknown error') : 'no camera found';
+    idle('<p>Could not open the camera: '+why+
+      '</p><p>Allow camera access, or use <b>Open image</b> to scan a photo instead.</p>');
+    return;
+  }
+  try{
+    video.srcObject = stream;
+    await video.play();
+    await maximize(stream.getVideoTracks()[0]);
+    videoDevices = (await navigator.mediaDevices.enumerateDevices()).filter(d=>d.kind==='videoinput');
+    // Keep deviceIdx pointing at the camera we actually got.
+    const active = stream.getVideoTracks()[0].getSettings().deviceId;
+    const i = videoDevices.findIndex(d=>d.deviceId===active);
+    if(i>=0) deviceIdx=i;
+    video.style.display='block';
+    $('camIdle').style.display='none';
+    show('cam');
+  }catch(e){
+    stopCam(true);
+    idle('<p>Could not start the video preview: '+(e.message||e.name)+'</p>');
+  }
+}
+function stopCam(silent){
+  if(stream){stream.getTracks().forEach(t=>t.stop());stream=null;}
+  video.srcObject=null;
+  if(!silent) idle('');
+  renderBar();
+}
+// Show the placeholder panel with a Start camera button.
+function idle(html){
+  video.style.display='none';
+  const el=$('camIdle');
+  el.style.display='';
+  el.innerHTML=html;
+  const b=document.createElement('button');
+  b.className='primary'; b.textContent='Start camera'; b.onclick=startCam;
+  el.appendChild(b);
+}
+
+
+function capture(){
+  if(!video.videoWidth) return;
+  const c=document.createElement('canvas');
+  c.width=video.videoWidth; c.height=video.videoHeight;
+  c.getContext('2d').drawImage(video,0,0);
+  stopCam();          // free the camera; the frame is ours now
+  loadSource(c);
+}
+function loadSource(canvas){
+  source=canvas;
+  corners = defaultCorners(source);
+  rotation=0;
+  show('edit'); drawEdit();
+}
+function defaultCorners(c){
+  const mx=c.width*0.1, my=c.height*0.1;
+  return [{x:mx,y:my},{x:c.width-mx,y:my},{x:c.width-mx,y:c.height-my},{x:mx,y:c.height-my}];
+}
+
+
+/* ---------------- corner editing ---------------- */
+let editScale=1, dragIdx=-1;
+function drawEdit(){
+  const stage=$('vEdit').getBoundingClientRect();
+  const maxW=stage.width-24, maxH=stage.height-24;
+  editScale=Math.min(maxW/source.width, maxH/source.height, 1);
+  const w=Math.round(source.width*editScale), h=Math.round(source.height*editScale);
+  editCanvas.width=w; editCanvas.height=h;
+  ectx.drawImage(source,0,0,w,h);
+  const P=corners.map(p=>({x:p.x*editScale,y:p.y*editScale}));
+  // dim outside the quad
+  ectx.save();
+  ectx.beginPath(); ectx.rect(0,0,w,h);
+  ectx.moveTo(P[0].x,P[0].y); for(let i=3;i>=1;i--) ectx.lineTo(P[i].x,P[i].y);
+  ectx.closePath();
+  ectx.fillStyle='rgba(6,8,12,.55)'; ectx.fill('evenodd');
+  ectx.restore();
+  ectx.beginPath();
+  P.forEach((p,i)=> i?ectx.lineTo(p.x,p.y):ectx.moveTo(p.x,p.y));
+  ectx.closePath();
+  ectx.strokeStyle='#4f9cf9'; ectx.lineWidth=2; ectx.stroke();
+  P.forEach((p,i)=>{
+    ectx.beginPath(); ectx.arc(p.x,p.y,11,0,7);
+    ectx.fillStyle= i===dragIdx?'#26d07c':'rgba(79,156,249,.9)'; ectx.fill();
+    ectx.strokeStyle='#fff'; ectx.lineWidth=2; ectx.stroke();
+  });
+}
+function evPt(e){
+  const r=editCanvas.getBoundingClientRect();
+  return {x:(e.clientX-r.left)*(editCanvas.width/r.width), y:(e.clientY-r.top)*(editCanvas.height/r.height)};
+}
+editCanvas.addEventListener('pointerdown',e=>{
+  const p=evPt(e); let bi=-1,bd=30;
+  corners.forEach((c,i)=>{const d=Math.hypot(c.x*editScale-p.x, c.y*editScale-p.y); if(d<bd){bd=d;bi=i;}});
+  if(bi<0) return;
+  dragIdx=bi; editCanvas.setPointerCapture(e.pointerId); moveCorner(p); 
+});
+editCanvas.addEventListener('pointermove',e=>{ if(dragIdx>=0) moveCorner(evPt(e)); });
+editCanvas.addEventListener('pointerup',()=>{dragIdx=-1;$('loupe').style.display='none';drawEdit();});
+editCanvas.addEventListener('pointercancel',()=>{dragIdx=-1;$('loupe').style.display='none';drawEdit();});
+function moveCorner(p){
+  const x=Math.max(0,Math.min(editCanvas.width,p.x)), y=Math.max(0,Math.min(editCanvas.height,p.y));
+  corners[dragIdx]={x:x/editScale, y:y/editScale};
+  drawEdit(); loupe(x,y);
+}
+function loupe(x,y){
+  const L=$('loupe'), lc=L.getContext('2d'), Z=3.5;
+  L.style.display='block';
+  L.style.left=Math.max(0,Math.min(editCanvas.width-128, x-64))+'px';
+  L.style.top =(y>150? y-150 : y+30)+'px';
+  lc.clearRect(0,0,128,128);
+  lc.save(); lc.beginPath(); lc.arc(64,64,64,0,7); lc.clip();
+  const sw=128/Z, sh=128/Z;
+  lc.drawImage(source, (x/editScale)-sw/2*(1/editScale)*editScale/editScale, 0,1,1,0,0,0,0); // no-op guard
+  lc.drawImage(source, x/editScale - (sw/2)/editScale, y/editScale - (sh/2)/editScale,
+                       sw/editScale, sh/editScale, 0,0,128,128);
+  lc.restore();
+  lc.strokeStyle='#26d07c'; lc.lineWidth=1.5;
+  lc.beginPath(); lc.moveTo(64,44); lc.lineTo(64,84); lc.moveTo(44,64); lc.lineTo(84,64); lc.stroke();
+}
+
+/* ---------------- perspective warp ---------------- */
+// Solve H mapping dst(x,y) -> src(u,v); then inverse-sample.
+function homography(dst, src){
+  const A=[], b=[];
+  for(let i=0;i<4;i++){
+    const {x,y}=dst[i], {x:u,y:v}=src[i];
+    A.push([x,y,1,0,0,0,-x*u,-y*u]); b.push(u);
+    A.push([0,0,0,x,y,1,-x*v,-y*v]); b.push(v);
+  }
+  // Gaussian elimination with partial pivoting
+  for(let i=0;i<8;i++){
+    let piv=i;
+    for(let r=i+1;r<8;r++) if(Math.abs(A[r][i])>Math.abs(A[piv][i])) piv=r;
+    [A[i],A[piv]]=[A[piv],A[i]]; [b[i],b[piv]]=[b[piv],b[i]];
+    const d=A[i][i]||1e-12;
+    for(let r=i+1;r<8;r++){
+      const f=A[r][i]/d; if(!f) continue;
+      for(let c2=i;c2<8;c2++) A[r][c2]-=f*A[i][c2];
+      b[r]-=f*b[i];
+    }
+  }
+  const h=new Float64Array(9);
+  for(let i=7;i>=0;i--){
+    let s=b[i];
+    for(let c2=i+1;c2<8;c2++) s-=A[i][c2]*h[c2];
+    h[i]=s/(A[i][i]||1e-12);
+  }
+  h[8]=1; return h;
+}
+function doWarp(){
+  const [tl,tr,br,bl]=corners;
+  const d=(a,b)=>Math.hypot(a.x-b.x,a.y-b.y);
+  let w=Math.round(Math.max(d(tl,tr),d(bl,br)));
+  let h=Math.round(Math.max(d(tl,bl),d(tr,br)));
+  const cap=2600, s=Math.min(1, cap/Math.max(w,h));
+  w=Math.max(16,Math.round(w*s)); h=Math.max(16,Math.round(h*s));
+
+  const sc=document.createElement('canvas'); sc.width=source.width; sc.height=source.height;
+  const scx=sc.getContext('2d',{willReadFrequently:true}); scx.drawImage(source,0,0);
+  const sd=scx.getImageData(0,0,sc.width,sc.height), S=sd.data, SW=sc.width, SH=sc.height;
+
+  warped=document.createElement('canvas'); warped.width=w; warped.height=h;
+  const wctx=warped.getContext('2d');
+  const out=wctx.createImageData(w,h), O=out.data;
+  const H=homography([{x:0,y:0},{x:w,y:0},{x:w,y:h},{x:0,y:h}], corners);
+
+  for(let y=0;y<h;y++){
+    for(let x=0;x<w;x++){
+      const den=H[6]*x+H[7]*y+H[8];
+      const u=(H[0]*x+H[1]*y+H[2])/den, v=(H[3]*x+H[4]*y+H[5])/den;
+      const i=(y*w+x)*4;
+      if(u<0||v<0||u>SW-1||v>SH-1){O[i]=O[i+1]=O[i+2]=255;O[i+3]=255;continue;}
+      const x0=u|0, y0=v|0, x1=Math.min(x0+1,SW-1), y1=Math.min(y0+1,SH-1);
+      const fx=u-x0, fy=v-y0;
+      const p00=(y0*SW+x0)*4, p10=(y0*SW+x1)*4, p01=(y1*SW+x0)*4, p11=(y1*SW+x1)*4;
+      for(let k=0;k<3;k++){
+        O[i+k] = (S[p00+k]*(1-fx)*(1-fy) + S[p10+k]*fx*(1-fy) + S[p01+k]*(1-fx)*fy + S[p11+k]*fx*fy)|0;
+      }
+      O[i+3]=255;
+    }
+  }
+  wctx.putImageData(out,0,0);
+  rotation=0;
+  applyFilter();
+  show('out');
+}
+
+/* ---------------- filters ---------------- */
+function applyFilter(){
+  if(!warped) return;
+  const base=rotate(warped, rotation);
+  const c=document.createElement('canvas'); c.width=base.width; c.height=base.height;
+  const cx=c.getContext('2d',{willReadFrequently:true}); cx.drawImage(base,0,0);
+  const img=cx.getImageData(0,0,c.width,c.height), D=img.data, n=c.width*c.height;
+
+  if(filterMode==='enhance'){
+    for(let ch=0;ch<3;ch++){
+      const hist=new Int32Array(256);
+      for(let i=0;i<n;i++) hist[D[i*4+ch]]++;
+      let lo=0,hi=255,acc=0;
+      const loT=n*0.02, hiT=n*0.985;
+      for(let v=0;v<256;v++){acc+=hist[v]; if(acc>=loT){lo=v;break;}}
+      acc=0;
+      for(let v=0;v<256;v++){acc+=hist[v]; if(acc>=hiT){hi=v;break;}}
+      const span=Math.max(1,hi-lo), lut=new Uint8Array(256);
+      for(let v=0;v<256;v++) lut[v]=Math.max(0,Math.min(255,((v-lo)*255/span)|0));
+      for(let i=0;i<n;i++) D[i*4+ch]=lut[D[i*4+ch]];
+    }
+  } else if(filterMode==='gray'){
+    for(let i=0;i<n;i++){
+      const g=(D[i*4]*0.299+D[i*4+1]*0.587+D[i*4+2]*0.114)|0;
+      D[i*4]=D[i*4+1]=D[i*4+2]=g;
+    }
+  } else if(filterMode==='bw'){
+    adaptiveThreshold(D,c.width,c.height);
+  }
+  cx.putImageData(img,0,0);
+  filtered=c;
+  const stage=$('vOut').getBoundingClientRect();
+  outCanvas.width=c.width; outCanvas.height=c.height;
+  outCanvas.style.maxWidth=(stage.width-24)+'px'; outCanvas.style.maxHeight=(stage.height-24)+'px';
+  outctx.drawImage(c,0,0);
+}
+function rotate(c,deg){
+  if(!deg) return c;
+  const r=document.createElement('canvas');
+  const sw=(deg%180)?c.height:c.width, sh=(deg%180)?c.width:c.height;
+  r.width=sw; r.height=sh;
+  const x=r.getContext('2d');
+  x.translate(sw/2,sh/2); x.rotate(deg*Math.PI/180); x.drawImage(c,-c.width/2,-c.height/2);
+  return r;
+}
+// Mean-of-neighbourhood threshold via integral image (Bradley/Wellner).
+function adaptiveThreshold(D,W,H){
+  const n=W*H, g=new Float64Array(n), I=new Float64Array((W+1)*(H+1));
+  for(let i=0;i<n;i++) g[i]=D[i*4]*0.299+D[i*4+1]*0.587+D[i*4+2]*0.114;
+  for(let y=0;y<H;y++){
+    let row=0;
+    for(let x=0;x<W;x++){
+      row+=g[y*W+x];
+      I[(y+1)*(W+1)+(x+1)] = I[y*(W+1)+(x+1)] + row;
+    }
+  }
+  const rad=Math.max(8, Math.round(Math.min(W,H)/22)), C=0.90;
+  for(let y=0;y<H;y++){
+    const y0=Math.max(0,y-rad), y1=Math.min(H-1,y+rad);
+    for(let x=0;x<W;x++){
+      const x0=Math.max(0,x-rad), x1=Math.min(W-1,x+rad);
+      const area=(x1-x0+1)*(y1-y0+1);
+      const sum=I[(y1+1)*(W+1)+(x1+1)]-I[y0*(W+1)+(x1+1)]-I[(y1+1)*(W+1)+x0]+I[y0*(W+1)+x0];
+      const v = g[y*W+x] < (sum/area)*C ? 0 : 255;
+      const i=(y*W+x)*4; D[i]=D[i+1]=D[i+2]=v;
+    }
+  }
+}
+
+/* ---------------- output ---------------- */
+let toastTimer=null;
+function toast(msg){
+  const t=$('toast');
+  t.textContent=msg; t.style.display='block';
+  clearTimeout(toastTimer);
+  toastTimer=setTimeout(()=>{t.style.display='none';},2600);
+}
+
+function copyImage(){
+  if(!navigator.clipboard || !window.ClipboardItem){ toast('This browser cannot copy images to the clipboard'); return; }
+  // Safari needs the ClipboardItem built synchronously from a Blob promise,
+  // otherwise the user-gesture that authorises the write has already expired.
+  const blob = new Promise(res=>filtered.toBlob(res,'image/png'));
+  navigator.clipboard.write([new ClipboardItem({'image/png':blob})])
+    .then(()=>toast('Image copied to clipboard'))
+    .catch(e=>toast('Copy failed: '+(e.message||e.name)));
+}
+
+const OCR_SRC='https://cdn.jsdelivr.net/npm/tesseract.js@5/dist/tesseract.min.js';
+function loadScript(src){
+  return new Promise((res,rej)=>{
+    const el=document.createElement('script');
+    el.src=src; el.onload=res;
+    el.onerror=()=>rej(new Error('could not load the OCR engine'));
+    document.head.appendChild(el);
+  });
+}
+function ocrStatus(msg){ $('ocrStatus').textContent=msg; }
+async function extractText(){
+  $('ocr').classList.add('on');
+  $('ocrText').value='';
+  try{
+    if(!window.Tesseract){ ocrStatus('Loading OCR engine\u2026'); await loadScript(OCR_SRC); }
+    ocrStatus('Reading text\u2026');
+    const {data}=await Tesseract.recognize(filtered,'eng',{logger:m=>{
+      if(m.status==='recognizing text') ocrStatus('Reading text\u2026 '+Math.round(m.progress*100)+'%');
+    }});
+    const text=(data.text||'').trim();
+    $('ocrText').value = text || '(no text found)';
+    ocrStatus(text ? 'Done \u2014 '+text.split(/\s+/).length+' words' : 'Done');
+  }catch(e){
+    ocrStatus('OCR failed: '+(e.message||e.name)+'. The engine downloads on first use, so this needs an internet connection once.');
+  }
+}
+
+function download(){
+  const a=document.createElement('a');
+  a.download='scan-'+new Date().toISOString().slice(0,19).replace(/[:T]/g,'-')+'.png';
+  a.href=filtered.toDataURL('image/png');
+  a.click();
+}
+
+/* ---------------- input wiring ---------------- */
+$('btnStart').onclick=startCam;
+$('ocrClose').onclick=()=>$('ocr').classList.remove('on');
+$('ocrCopy').onclick=()=>{
+  const t=$('ocrText');
+  t.select();
+  navigator.clipboard.writeText(t.value).then(()=>toast('Text copied')).catch(()=>document.execCommand('copy'));
+};
+$('btnFile').onclick=()=>$('file').click();
+$('file').onchange=e=>{
+  const f=e.target.files[0]; if(!f) return;
+  const img=new Image();
+  img.onload=()=>{
+    const c=document.createElement('canvas'); c.width=img.naturalWidth; c.height=img.naturalHeight;
+    c.getContext('2d').drawImage(img,0,0);
+    loadSource(c);
+  };
+  img.src=URL.createObjectURL(f);
+  e.target.value='';
+};
+addEventListener('keydown',e=>{
+  if(e.key==='Escape'&&$('ocr').classList.contains('on')){$('ocr').classList.remove('on');return;}
+  if(e.code==='Space'&&view==='cam'&&stream){e.preventDefault();capture();}
+  if(e.key==='Enter'&&view==='edit'){doWarp();}
+});
+addEventListener('resize',()=>{ if(view==='edit'&&source) drawEdit(); if(view==='out') applyFilter(); });
+renderBar();
+</script>
+</body>
+</html>
